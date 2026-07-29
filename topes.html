@@ -1,0 +1,147 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<title>Reporte de Topes de Horario</title>
+<script src="https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js"></script>
+<style>
+  body{font-family:Segoe UI,Arial,sans-serif;background:#f4f5f7;margin:0;padding:40px;color:#222}
+  .card{max-width:820px;margin:auto;background:#fff;border-radius:10px;padding:32px;box-shadow:0 2px 12px rgba(0,0,0,.08)}
+  h1{color:#C00000;font-size:22px;margin:0 0 4px}
+  p.sub{color:#666;margin:0 0 24px;font-size:14px}
+  #drop{border:2px dashed #C00000;border-radius:8px;padding:40px;text-align:center;color:#888;cursor:pointer;transition:.2s}
+  #drop.hover{background:#fff5f5;color:#C00000}
+  #drop p{margin:0 0 14px}
+  #browseBtn{background:#C00000;color:#fff;border:0;border-radius:6px;padding:10px 18px;font-size:14px;cursor:pointer}
+  #browseBtn:hover{background:#a30000}
+  button{background:#C00000;color:#fff;border:0;border-radius:6px;padding:10px 18px;font-size:14px;cursor:pointer;margin-top:16px}
+  button:disabled{background:#bbb;cursor:default}
+  #log{margin-top:20px;font-size:13px;white-space:pre-wrap;background:#fafafa;border-left:3px solid #C00000;padding:12px;display:none}
+  table{border-collapse:collapse;width:100%;margin-top:20px;font-size:12px}
+  th{background:#C00000;color:#fff;padding:6px;text-align:left}
+  td{border:1px solid #ddd;padding:5px}
+</style>
+</head>
+<body>
+<div class="card">
+  <h1>Reporte de Topes de Horario</h1>
+  <p class="sub">Sube la Programación Académica (.xlsx). El procesamiento ocurre en tu equipo; ningún dato sale del navegador.</p>
+  <div id="drop">
+    <p>Arrastra el archivo aquí</p>
+    <button type="button" id="browseBtn">Buscar archivo en el equipo</button>
+    <input type="file" id="file" accept=".xlsx,.xls" hidden>
+  </div>
+  <button id="dl" disabled>Descargar reporte (.xlsx)</button>
+  <div id="log"></div>
+  <div id="prev"></div>
+</div>
+
+<script>
+const FIRST_ROW = 12;                    // datos desde la fila 12 (se ignoran las 10 primeras + encabezados)
+const C = {campus:1, materia:4, curso:5, nrc:8, listas:9, prof:15, asig:16, horario:20}; // B,E,F,I,J,P,Q,U
+const NOM = {LU:"Lunes",MA:"Martes",MI:"Miércoles",JU:"Jueves",VI:"Viernes",SA:"Sábado",DO:"Domingo"};
+const ORD = {LU:1,MA:2,MI:3,JU:4,VI:5,SA:6,DO:7};
+const HDR = ["Profesor","Día","Código Asignatura 1","Asignatura 1","NRC 1","Campus 1","Horario 1",
+             "Código Asignatura 2","Asignatura 2","NRC 2","Campus 2","Horario 2"];
+const hhmm = m => String(Math.floor(m/60)).padStart(2,"0")+":"+String(m%60).padStart(2,"0");
+const txt = v => (v===undefined||v===null) ? "" : String(v).trim();
+
+let reporte = null;
+const drop=document.getElementById("drop"), inp=document.getElementById("file"),
+      dl=document.getElementById("dl"), log=document.getElementById("log"), prev=document.getElementById("prev"),
+      browseBtn=document.getElementById("browseBtn");
+
+// Botón explícito para buscar archivo en el equipo
+browseBtn.onclick = (e) => { e.stopPropagation(); inp.click(); };
+
+// La zona también permite clic para buscar (excepto sobre el botón, ya manejado arriba)
+drop.onclick = () => inp.click();
+drop.ondragover = e => {e.preventDefault(); drop.classList.add("hover");};
+drop.ondragleave = () => drop.classList.remove("hover");
+drop.ondrop = e => {e.preventDefault(); drop.classList.remove("hover"); if(e.dataTransfer.files[0]) procesar(e.dataTransfer.files[0]);};
+inp.onchange = () => { if(inp.files[0]) procesar(inp.files[0]); };
+
+function msg(t){ log.style.display="block"; log.textContent = t; }
+
+async function procesar(file){
+  msg("Leyendo " + file.name + " …");
+  const wb = XLSX.read(await file.arrayBuffer(), {cellDates:false});
+  // Hoja base: la que tenga "Nombre Profesor" y "Horario" en la fila 11 (independiente del nombre)
+  let rows = null, hojaUsada = null;
+  for (const name of wb.SheetNames){
+    const r = XLSX.utils.sheet_to_json(wb.Sheets[name], {header:1, blankrows:true, defval:""});
+    const h = (r[10]||[]).map(v => txt(v).toUpperCase());
+    if (h[C.prof]==="NOMBRE PROFESOR" && h[C.horario]==="HORARIO"){ rows=r; hojaUsada=name; break; }
+  }
+  if(!rows){ rows = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], {header:1, blankrows:true, defval:""}); hojaUsada = wb.SheetNames[0]; }
+
+  // ---- Parseo de bloques horarios ----
+  const recs = [];
+  for (let i = FIRST_ROW-1; i < rows.length; i++){
+    const row = rows[i] || [];
+    const pStr = txt(row[C.prof]), hStr = txt(row[C.horario]);
+    if(!pStr || !hStr) continue;
+    for (let pn of pStr.split("/")){
+      pn = pn.trim().toUpperCase();
+      if(!pn || pn.includes("POR DEFINIR")) continue;
+      for (const bq of hStr.split("/")){
+        const t = bq.replace(/\./g," ").trim().split(/\s+/);
+        if(t.length < 4) continue;
+        const a = parseInt(t[1],10), b = parseInt(t[t.length-1],10);
+        if(!a || !b) continue;
+        const ini = Math.floor(a/100)*60 + a%100, fin = Math.floor(b/100)*60 + b%100;
+        if(ini<=0 || fin<=ini) continue;
+        recs.push({prof:pn, dia:t[0].substring(0,2).toUpperCase(), ini, fin, fila:i+1,
+          nrc:txt(row[C.nrc]), camp:txt(row[C.campus]),
+          cod:txt(row[C.materia]) + txt(row[C.curso]),
+          asig:txt(row[C.asig]), lc:txt(row[C.listas]).toUpperCase()});
+      }
+    }
+  }
+
+  // ---- Detección de topes (agrupado por profesor+día) ----
+  const grupos = new Map();
+  recs.forEach(x => { const k = x.prof+"|"+x.dia; (grupos.get(k) || grupos.set(k,[]).get(k)).push(x); });
+  const vistos = new Set(), pares = [];
+  for (const arr of grupos.values()){
+    arr.sort((x,y)=>x.ini-y.ini);
+    for(let i=0;i<arr.length;i++) for(let j=i+1;j<arr.length;j++){
+      const a=arr[i], b=arr[j];
+      if(b.ini >= a.fin) break;                              // ya no puede solapar
+      if(!(a.ini < b.fin && b.ini < a.fin)) continue;         // solape real
+      if(a.nrc === b.nrc) continue;                          // mismo NRC
+      if(a.lc === "SI" && b.lc === "SI") continue;            // listas cruzadas en ambos
+      const key = [a.prof,a.dia,a.nrc,b.nrc,a.ini,a.fin,b.ini,b.fin].join("|");
+      if(vistos.has(key)) continue; vistos.add(key);
+      pares.push([a,b]);
+    }
+  }
+  pares.sort((x,y)=> x[0].prof.localeCompare(y[0].prof) || (ORD[x[0].dia]||9)-(ORD[y[0].dia]||9) || x[0].ini-y[0].ini);
+
+  reporte = pares.map(([a,b])=>[a.prof, NOM[a.dia]||a.dia, a.cod, a.asig, a.nrc, a.camp, hhmm(a.ini)+" - "+hhmm(a.fin),
+                                b.cod, b.asig, b.nrc, b.camp, hhmm(b.ini)+" - "+hhmm(b.fin)]);
+  msg(`Hoja procesada: ${hojaUsada}\nBloques horarios analizados: ${recs.length}\nTopes detectados: ${reporte.length}`);
+  vistaPrevia();
+  dl.disabled = reporte.length === 0;
+}
+
+function vistaPrevia(){
+  const n = Math.min(20, reporte.length);
+  if(!n){ prev.innerHTML=""; return; }
+  let h = "<table><tr>" + HDR.map(x=>`<th>${x}</th>`).join("") + "</tr>";
+  for(let i=0;i<n;i++) h += "<tr>" + reporte[i].map(c=>`<td>${c}</td>`).join("") + "</tr>";
+  prev.innerHTML = h + "</table>" + (reporte.length>n ? `<p class="sub">Mostrando ${n} de ${reporte.length} filas.</p>` : "");
+}
+
+dl.onclick = () => {
+  const ws = XLSX.utils.aoa_to_sheet([HDR, ...reporte]);
+  ws["!cols"] = [{wch:34},{wch:11},{wch:14},{wch:30},{wch:9},{wch:20},{wch:16},{wch:14},{wch:30},{wch:9},{wch:20},{wch:16}];
+  ws["!autofilter"] = {ref: XLSX.utils.encode_range({s:{r:0,c:0}, e:{r:reporte.length, c:11}})};
+  ws["!freeze"] = {xSplit:0, ySplit:1};
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, "Topes de Horario");
+  XLSX.writeFile(wb, "Topes de Horario.xlsx");
+};
+</script>
+</body>
+</html>
