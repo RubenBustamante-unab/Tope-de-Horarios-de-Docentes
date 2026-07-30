@@ -20,9 +20,27 @@
   table{border-collapse:collapse;width:100%;margin-top:20px;font-size:12px}
   th{background:#C00000;color:#fff;padding:6px;text-align:left}
   td{border:1px solid #ddd;padding:5px}
+  #visitas{position:fixed;top:14px;right:16px;font-size:12px;color:#999;z-index:10}
+  #visitas img{vertical-align:middle;height:20px}
+  #filtroUA{margin-top:20px;display:none}
+  #filtroUA label.titulo{display:block;font-size:13px;font-weight:600;margin-bottom:6px;color:#444}
+  #uaBuscar{width:100%;box-sizing:border-box;border:1px solid #ccc;border-radius:6px;padding:9px 10px;font-size:13px}
+  #uaTodoFila{display:flex;align-items:center;gap:8px;padding:7px 10px;font-size:13px;font-weight:600;color:#444;border:1px solid #ccc;border-top:0;background:#fafafa}
+  #uaTodoFila input{accent-color:#C00000;width:15px;height:15px;cursor:pointer}
+  #uaTodoFila span{cursor:pointer}
+  #uaLista{max-height:180px;overflow-y:auto;border:1px solid #ccc;border-top:0;border-radius:0 0 6px 6px;padding:4px 10px}
+  .ua-item{display:flex;align-items:center;gap:8px;padding:6px 0;font-size:13px;border-bottom:1px solid #f0f0f0}
+  .ua-item:last-child{border-bottom:0}
+  .ua-item input{accent-color:#C00000;width:15px;height:15px;cursor:pointer}
+  .ua-item span{cursor:pointer}
+  #filtroUA p.hint{margin:6px 0 0;font-size:12px;color:#888}
+  #filtroUA p.vacio{margin:8px 2px;font-size:12px;color:#aaa}
 </style>
 </head>
 <body>
+<div id="visitas">
+  <img src="https://visitor-badge.laobi.icu/badge?page_id=rubenbustamante-unab.tope-de-horarios-de-docentes&left_text=Visitas&left_color=8f0000&right_color=C00000" alt="Contador de visitas">
+</div>
 <div class="card">
   <h1>Reporte de Topes de Horario</h1>
   <p class="sub">Sube la Programación Académica (.xlsx). El procesamiento ocurre en tu equipo; ningún dato sale del navegador.</p>
@@ -31,6 +49,13 @@
     <button type="button" id="browseBtn">Buscar archivo en el equipo</button>
     <input type="file" id="file" accept=".xlsx,.xls" hidden>
   </div>
+  <div id="filtroUA">
+    <label class="titulo">Unidad(es) académica(s)</label>
+    <input type="text" id="uaBuscar" placeholder="Buscar unidad académica…">
+    <label id="uaTodoFila"><input type="checkbox" id="uaTodo"><span>Seleccionar todo</span></label>
+    <div id="uaLista"></div>
+    <p class="hint">Marca una o más. Si no marcas ninguna, se incluyen todas.</p>
+  </div>
   <button id="dl" disabled>Descargar reporte (.xlsx)</button>
   <div id="log"></div>
   <div id="prev"></div>
@@ -38,7 +63,7 @@
 
 <script>
 const FIRST_ROW = 12;                    // datos desde la fila 12 (se ignoran las 10 primeras + encabezados)
-const C = {campus:1, materia:4, curso:5, nrc:8, listas:9, prof:15, asig:16, horario:20}; // B,E,F,I,J,P,Q,U
+const C = {campus:1, unidad:2, materia:4, curso:5, nrc:8, listas:9, prof:15, asig:16, horario:20}; // B,C,E,F,I,J,P,Q,U
 const NOM = {LU:"Lunes",MA:"Martes",MI:"Miércoles",JU:"Jueves",VI:"Viernes",SA:"Sábado",DO:"Domingo"};
 const ORD = {LU:1,MA:2,MI:3,JU:4,VI:5,SA:6,DO:7};
 const HDR = ["Profesor","Día","Código Asignatura 1","Asignatura 1","NRC 1","Campus 1","Horario 1",
@@ -46,10 +71,40 @@ const HDR = ["Profesor","Día","Código Asignatura 1","Asignatura 1","NRC 1","Ca
 const hhmm = m => String(Math.floor(m/60)).padStart(2,"0")+":"+String(m%60).padStart(2,"0");
 const txt = v => (v===undefined||v===null) ? "" : String(v).trim();
 
-let reporte = null;
+let reporte = null, rawRecs = [], unidadesTodas = [], seleccionUA = new Set();
 const drop=document.getElementById("drop"), inp=document.getElementById("file"),
       dl=document.getElementById("dl"), log=document.getElementById("log"), prev=document.getElementById("prev"),
-      browseBtn=document.getElementById("browseBtn");
+      browseBtn=document.getElementById("browseBtn"), filtroUA=document.getElementById("filtroUA"),
+      uaBuscar=document.getElementById("uaBuscar"), uaLista=document.getElementById("uaLista"),
+      uaTodo=document.getElementById("uaTodo");
+
+uaBuscar.oninput = () => renderUAList(uaBuscar.value);
+uaLista.addEventListener("change", e => {
+  if(e.target.type !== "checkbox") return;
+  if(e.target.checked) seleccionUA.add(e.target.value); else seleccionUA.delete(e.target.value);
+  actualizarUaTodo();
+  generarReporte();
+});
+uaTodo.onchange = () => {
+  seleccionUA = uaTodo.checked ? new Set(unidadesTodas) : new Set();
+  renderUAList(uaBuscar.value);
+  generarReporte();
+};
+
+function actualizarUaTodo(){
+  const total = unidadesTodas.length;
+  uaTodo.checked = total > 0 && seleccionUA.size === total;
+  uaTodo.indeterminate = seleccionUA.size > 0 && seleccionUA.size < total;
+}
+
+function renderUAList(filtro=""){
+  const f = filtro.trim().toLowerCase();
+  const visibles = unidadesTodas.filter(u => u.toLowerCase().includes(f));
+  uaLista.innerHTML = visibles.length
+    ? visibles.map(u => `<label class="ua-item"><input type="checkbox" value="${u}" ${seleccionUA.has(u)?"checked":""}><span>${u}</span></label>`).join("")
+    : `<p class="vacio">Sin coincidencias.</p>`;
+  actualizarUaTodo();
+}
 
 // Botón explícito para buscar archivo en el equipo
 browseBtn.onclick = (e) => { e.stopPropagation(); inp.click(); };
@@ -92,12 +147,29 @@ async function procesar(file){
         const ini = Math.floor(a/100)*60 + a%100, fin = Math.floor(b/100)*60 + b%100;
         if(ini<=0 || fin<=ini) continue;
         recs.push({prof:pn, dia:t[0].substring(0,2).toUpperCase(), ini, fin, fila:i+1,
-          nrc:txt(row[C.nrc]), camp:txt(row[C.campus]),
+          nrc:txt(row[C.nrc]), camp:txt(row[C.campus]), ua:txt(row[C.unidad]),
           cod:txt(row[C.materia]) + txt(row[C.curso]),
           asig:txt(row[C.asig]), lc:txt(row[C.listas]).toUpperCase()});
       }
     }
   }
+
+  rawRecs = recs;
+
+  // ---- Poblar el filtro de unidades académicas ----
+  unidadesTodas = [...new Set(recs.map(x => x.ua).filter(Boolean))].sort((a,b)=>a.localeCompare(b));
+  seleccionUA = new Set();
+  uaBuscar.value = "";
+  renderUAList();
+  filtroUA.style.display = unidadesTodas.length ? "block" : "none";
+
+  msg(`Hoja procesada: ${hojaUsada}\nBloques horarios analizados: ${recs.length}`);
+  generarReporte();
+}
+
+function generarReporte(){
+  const seleccion = [...seleccionUA];
+  const recs = seleccion.length ? rawRecs.filter(x => seleccion.includes(x.ua)) : rawRecs;
 
   // ---- Detección de topes (agrupado por profesor+día) ----
   const grupos = new Map();
@@ -120,7 +192,8 @@ async function procesar(file){
 
   reporte = pares.map(([a,b])=>[a.prof, NOM[a.dia]||a.dia, a.cod, a.asig, a.nrc, a.camp, hhmm(a.ini)+" - "+hhmm(a.fin),
                                 b.cod, b.asig, b.nrc, b.camp, hhmm(b.ini)+" - "+hhmm(b.fin)]);
-  msg(`Hoja procesada: ${hojaUsada}\nBloques horarios analizados: ${recs.length}\nTopes detectados: ${reporte.length}`);
+  const etiqueta = seleccion.length ? seleccion.join(", ") : "todas las unidades";
+  msg(`Unidad(es): ${etiqueta}\nBloques horarios considerados: ${recs.length}\nTopes detectados: ${reporte.length}`);
   vistaPrevia();
   dl.disabled = reporte.length === 0;
 }
